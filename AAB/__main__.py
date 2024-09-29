@@ -14,7 +14,7 @@ from AAB import file_client, bot
 
 # Constants
 MAIN_CHANNEL = Vars['main_channel']
-FILE_CHANNEL = Vars['file_channel']
+FILE_CHANNEL = Vars['files_channel']
 PRODUCTION_CHAT = Vars['production_chat']
 OWNER = Vars['owner']
 THUMBNAIL_URL = Vars['thumbnail_url']
