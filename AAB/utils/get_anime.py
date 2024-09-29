@@ -1,64 +1,75 @@
 # Licensed under GNU General Public License
 # Copyright (C) 2024  Dhruv-Tara
 
-
 import requests
 from lxml import etree
+from typing import Dict, List, Optional, TypedDict
 from AAB import LOG
 
-url = "http://subsplease.org/rss"
+URL = "http://subsplease.org/rss"
 
+class AnimeItem(TypedDict):
+    name: str
+    magnet: List[str]
+    hash: List[str]
+    quality: List[str]
+    title: List[str]
 
+class AnimeResult(TypedDict):
+    array: List[AnimeItem]
+    hash: str
 
-def get_anime(hash : str,to_add : int) :
+def get_anime(hash: str, to_add: int) -> Optional[AnimeResult]:
+    """
+    Fetch and process anime data from the RSS feed.
 
-    response = requests.get(url)
+    Args:
+    hash (str): The hash to compare against for determining new entries.
+    to_add (int): The maximum number of new entries to process.
 
-    if response.status_code == 200:
-        xml_data = response.text
-        root = etree.fromstring(xml_data)
+    Returns:
+    Optional[AnimeResult]: A dictionary containing the processed anime data and the newest hash,
+                           or None if no new data is found or an error occurs.
+    """
+    try:
+        response = requests.get(URL, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        LOG.error(f"Failed to fetch data: {e}")
+        return None
+
+    try:
+        root = etree.fromstring(response.content)
         items = root.xpath('//item')
+    except etree.XMLSyntaxError as e:
+        LOG.error(f"Failed to parse XML: {e}")
+        return None
 
-        array = []
+    array: List[AnimeItem] = []
 
-        for i in range(0,to_add):
+    for item in items[:to_add]:
+        current_hash = item.findtext('guid')
+        if current_hash == hash:
+            break
 
-            if hash == items[i].findtext('guid') :
-                break
-
-            else :
-                
-                try :
-                    if array[-1]['name'] == items[i].findtext('category').split("-")[0] :
-
-                        array[-1]['magnet'].append(items[i].findtext('link'))
-                        array[-1]['hash'].append(items[i].findtext('guid'))
-                        array[-1]['quality'].append(items[i].findtext('category').split("-")[-1])
-                        array[-1]['title'].append(items[i].findtext('title'))
-
-                    else :
-
-                        array.append({
-                            'name' : items[i].findtext('category').split("-")[0],
-                            'magnet' : [items[i].findtext('link')],
-                            'hash' :  [items[i].findtext('guid')],
-                            'quality' : [items[i].findtext('category').split("-")[-1]],
-                            'title' : [items[i].findtext('title')]
-                        })
-                
-                except IndexError :
-                    array.append({
-                            'name' : items[i].findtext('category').split("-")[0],
-                            'magnet' : [items[i].findtext('link')],
-                            'hash' :  [items[i].findtext('guid')],
-                            'quality' : [items[i].findtext('category').split("-")[-1]],
-                            'title' : [items[i].findtext('title')]
-                        })
-
-        if len(array) == 0 :
-            return None
+        name = item.findtext('category', '').split("-")[0]
+        quality = item.findtext('category', '').split("-")[-1]
         
-        return {'array' : array,'hash' : array[0]['hash'][0]}
+        new_item = {
+            'name': name,
+            'magnet': [item.findtext('link', '')],
+            'hash': [current_hash],
+            'quality': [quality],
+            'title': [item.findtext('title', '')]
+        }
 
-    else:
-        LOG.error(f"Failed to fetch data. Status code: {response.status_code}")
+        if array and array[-1]['name'] == name:
+            for key in ['magnet', 'hash', 'quality', 'title']:
+                array[-1][key].append(new_item[key][0])
+        else:
+            array.append(new_item)
+
+    if not array:
+        return None
+
+    return {'array': array, 'hash': array[0]['hash'][0]}
