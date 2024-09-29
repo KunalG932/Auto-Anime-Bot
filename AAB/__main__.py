@@ -10,7 +10,7 @@ from AAB.db import (
     is_working, get_remain_anime, is_new_db, get_last_hash, add_remain_anime,
     add_hash, mongo_client
 )
-from AAB import file_client, bot
+from AAB import file_client, bot, POST_MESSAGE
 
 # Constants
 MAIN_CHANNEL = Vars['main_channel']
@@ -18,7 +18,6 @@ FILE_CHANNEL = Vars['files_channel']
 PRODUCTION_CHAT = Vars['production_chat']
 OWNER = Vars['owner']
 THUMBNAIL_URL = Vars['thumbnail_url']
-POST_MESSAGE = Vars['post_message']
 
 async def send_logs(client: Client, message: Message) -> None:
     try:
