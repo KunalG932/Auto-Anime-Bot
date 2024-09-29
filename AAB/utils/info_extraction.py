@@ -1,38 +1,32 @@
-# Licensed under GNU General Public License
-# Copyright (C) 2024  Dhruv-Tara
-
 import re
+from typing import Dict, Optional
 
-def extract_info(input_string):
-
+def extract_info(input_string: str) -> Optional[Dict[str, str]]:
     pattern = r"\[SubsPlease\] (.+?)(?: S(\d+))? - (\d+)(?: \((\d+p)\) \[.+?\])?"
-
     match = re.match(pattern, input_string)
 
-    if match:
-        
-        title = match.group(1)
-        season = match.group(2)
-        episode = match.group(3)
-        quality = match.group(4)
+    if not match:
+        return None
 
+    title, season, episode, quality = match.groups()
 
-        if episode and season:
-            result = f"{title} Season {season} Episode {episode}"
-        elif episode:
-            result = f"{title}"
-        elif season:
-            result = f"{title} Season {season}"
-        else:
-            result = title
-
-        if not season :
-
-            return {"main_res" : result,"search_que" : title,'episode' : episode}
-        else :
-            return {"main_res" : result,"search_que" : f"{title} Season {season}",'episode' : episode}
-        
+    if season and episode:
+        main_res = f"{title} Season {season} Episode {episode}"
+        search_que = f"{title} Season {season}"
+    elif episode:
+        main_res = title
+        search_que = title
+    elif season:
+        main_res = f"{title} Season {season}"
+        search_que = f"{title} Season {season}"
     else:
+        main_res = title
+        search_que = title
 
-        return "No match found."
-    
+    return {
+        "main_res": main_res,
+        "search_que": search_que,
+        "episode": episode or "",
+        "season": season or "",
+        "quality": quality or ""
+    }
