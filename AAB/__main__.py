@@ -7,7 +7,7 @@ from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from AAB.utils import extract_info, anime, download_magnet, encode_file, generate_hash, get_anime
 from AAB.db import (
     get_file_by_hash, add_file, remove_anime_from_remain, update_worker,
-    is_working, get_remain_anime, is_new_db, get_last_hash, add_remain_anime,
+    is_working, get_remain_anime, is_new_db, get_last_hash, add_remain_anime as add_remain_amime,
     add_hash, mongo_client
 )
 from AAB import file_client, bot, POST_MESSAGE
