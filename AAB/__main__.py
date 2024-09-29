@@ -1,282 +1,186 @@
-# Licensed under GNU General Public License
-# Copyright (C) 2024  Dhruv-Tara
-
-
 import asyncio
 import os
-from AAB import *
-from pyrogram import *
-from pyrogram.types import *
-import time
-import threading
-from AAB.utils import *
-from AAB.db import *
+from typing import List, Dict, Any
+from AAB import bot, file_client, Vars, LOG
+from pyrogram import Client, filters
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from AAB.utils import extract_info, anime, download_magnet, encode_file, generate_hash, get_anime
+from AAB.db import (
+    get_file_by_hash, add_file, remove_anime_from_remain, update_worker,
+    is_working, get_remain_anime, is_new_db, get_last_hash, add_remain_amime,
+    add_hash, mongo_client
+)
+from AAB import file_client, bot
 
-loop = asyncio.get_event_loop()
+# Constants
+MAIN_CHANNEL = Vars['main_channel']
+FILE_CHANNEL = Vars['file_channel']
+PRODUCTION_CHAT = Vars['production_chat']
+OWNER = Vars['owner']
+THUMBNAIL_URL = Vars['thumbnail_url']
+POST_MESSAGE = Vars['post_message']
 
+async def send_logs(client: Client, message: Message) -> None:
+    try:
+        await client.send_document(
+            message.from_user.id,
+            'logging.txt',
+            caption="This is the log of the current session."
+        )
+        await message.reply_text("Sent logs to your PM")
+        LOG.info(f"Sent logs to {message.from_user.id}")
+    except Exception as e:
+        error_message = f"Error occurred during sending of logs: {e}"
+        await message.reply_text(error_message)
+        LOG.error(error_message)
 
-@bot.on_message(filters.command("alive") & filters.user(Vars['owner']),group=2)
-async def alive(client : Client, message : Message) :
+async def progress_callback(current: int, total: int) -> None:
+    LOG.info(f"{current * 100 / total:.1f}%")
+
+async def upload_file(file_path: str, file_name: str, caption: str) -> Message:
+    return await file_client.send_document(
+        chat_id=FILE_CHANNEL,
+        document=file_path,
+        file_name=file_name,
+        caption=caption,
+        force_document=True,
+        thumb=THUMBNAIL_URL,
+        progress=progress_callback
+    )
+
+async def process_anime_file(anime_info: Dict[str, Any], quality: str, magnet: str, title: str) -> None:
+    update_msg = await bot.send_message(PRODUCTION_CHAT, f"Downloading {title}")
+    
+    try:
+        file_info = await download_magnet(magnet, update_msg)
+        await bot.send_message(PRODUCTION_CHAT, f"Uploading {title}")
+        
+        file_msg = await upload_file(file_info['file'], anime_info['main_res'], title)
+        anime_hash = generate_hash(20)
+        add_file(title, anime_hash, file_msg.id)
+
+        if quality == " 720":
+            await process_encoded_file(file_info['file'], anime_info, title)
+
+        os.remove(file_info['file'])
+        remove_anime_from_remain()
+    except Exception as e:
+        LOG.error(f"Error processing anime file: {e}")
+        await bot.send_message(PRODUCTION_CHAT, "There was an issue sending a file. Check logs for more info.")
+
+async def process_encoded_file(file_path: str, anime_info: Dict[str, Any], title: str) -> None:
+    enc_msg = await bot.send_message(PRODUCTION_CHAT, f"Encoding {title}")
+    encoded = await encode_file(file_path)
+    await enc_msg.edit_text("Encoded successfully, now uploading")
+    
+    encode_msg = await upload_file(encoded, f"[ENCODED] {anime_info['main_res']}", f"[ENCODED] {title}")
+    enc_anime_hash = generate_hash(20)
+    add_file(title, enc_anime_hash, encode_msg.id)
+    
+    os.remove(encoded)
+
+async def anime_upload(anime_list: List[Dict[str, Any]]) -> None:
+    try:
+        for anime_item in anime_list:
+            name = extract_info(anime_item['title'][0])
+            anime_info = anime(name['search_que'])
+
+            message = await bot.send_photo(
+                MAIN_CHANNEL,
+                anime_info['image'],
+                caption=POST_MESSAGE.format(name['main_res'], name['episode'], anime_info['status']),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(text="Uploading", callback_data="NTG")]])
+            )
+
+            for i, hash_value in enumerate(anime_item['hash']):
+                await process_anime_file(name, anime_item['quality'][i], anime_item['magnet'][i], anime_item['title'][i])
+                
+                markup = message.reply_markup.inline_keyboard if message.reply_markup else []
+                markup.append([InlineKeyboardButton(
+                    text=f'{anime_item["quality"][i]}',
+                    url=f"https://t.me/{bot.me.username}?start={hash_value}"
+                )])
+                await message.edit_reply_markup(InlineKeyboardMarkup(markup))
+
+        update_worker(False)
+    except Exception as e:
+        LOG.error(f"Error in anime_upload: {e}")
+        update_worker(False)
+
+async def anime_worker() -> None:
+    if is_working():
+        return
+
+    try:
+        anime_lst = get_remain_anime()
+        if anime_lst:
+            await anime_upload(anime_lst)
+    except Exception as e:
+        LOG.error(f"Error in anime_worker: {e}")
+
+async def check_anime() -> None:
+    if is_new_db():
+        LOG.info("New DB, making required changes")
+        anime_list = get_anime('0', 10)
+        add_remain_amime(anime_list['array'])
+        add_hash(anime_list['hash'])
+    else:
+        LOG.info("Checking for new anime")
+        last_hash = get_last_hash()
+        anime_list = get_anime(last_hash, 30)
+
+        if anime_list:
+            add_remain_amime(anime_list['array'])
+            add_hash(anime_list['hash'])
+            await bot.send_message(PRODUCTION_CHAT, f"{len(anime_list['array'])} new anime are added to db")
+            LOG.info(f"{len(anime_list['array'])} new anime are added to db.")
+
+@bot.on_message(filters.command("alive") & filters.user(OWNER), group=2)
+async def alive(client: Client, message: Message) -> None:
     await message.reply_text("I am alive.")
-    return
-
-
 
 @bot.on_message(filters.command('start') & filters.private)
-async def start_pm(client : bot,message : Message) :
-    try :
-
+async def start_pm(client: Client, message: Message) -> None:
+    try:
         txt = message.text.split("_")[-1]
         doc = get_file_by_hash(txt)
 
-        if not txt :
-            await message.reply_text("Hello I am the file sender bot\n\nI send anime based on the given hash and id.")
-
-        elif doc == None :
-            await message.reply_text("Wrong Hash given")
-        
-        else :
-
-            await bot.forward_messages(message.chat.id,file_channel,doc['message_id'],protect_content= True)
-
-
-    
-    except Exception as eor :
-        LOG.error(eor)
-        return
-
-
-
-
-@bot.on_message(filters.command('logs') & filters.user(Vars['owner']))
-async def send_logs(client : Client, message : Message) :
-    try :
-        await client.send_document(message.from_user.id,'logging.txt',caption="This the log of current session.")
-        await message.reply_text("Sent Logs to your pm")
-        LOG.info("Sent logs to {}".format(message.from_user.id))
-        return
-    except Exception as eor :
-        await message.reply_text("This error occured during sending of logs : \n\n{}".format(eor))
-        LOG.error("Error occured during sending of logs : \n\n{}".format(eor))
-
-
-
-
-def progress(current, total):
-    
-    LOG.info(f"{current * 100 / total:.1f}%")
-
-
-
-# As the name suggests 
-
-def anime_upload(anime_list) :
-    
-    try :
-        for i in anime_list :
-            
-
-            name = extract_info(i['title'][0])
-            anime_info = anime(name['search_que'])
-
-            message = bot.send_photo(Main_Channel,anime_info['image'],caption= post_message.format(name['main_res'],name['episode'],anime_info['status']),reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(text="Uploading",callback_data="NTG")]]))
-
-            for number in range(0,len(i['hash'])) :
-
-                try :
-                    
-                    update_msg = bot.send_message(production_chat,"Downloading {}".format(i['name']))
-
-
-                    if i['quality'][number] == " 720" :
-
-                        file_ = download_magnet(i['magnet'][number],update_msg)
-                        bot.send_message(production_chat,"Uploading {}".format(i['name']))
-                        
-                        file_msg = file_client.send_document(chat_id=file_channel,document= file_['file'],file_name= name['main_res'],caption=i['title'][number],force_document= True,thumb=thumbnail_url,progress=progress)
-                        anime_hash = generate_hash(20)
-                        msg_id = file_msg.id
-                        add_file(i['title'][number],anime_hash,msg_id)
-
-                        # NORMAL 
-
-                        markup = message.reply_markup.inline_keyboard if message.reply_markup else []
-                        [markup.append([InlineKeyboardButton(text=f'{i["quality"][number]}',url= f"https://t.me/{bot_me.username}?start={msg_id}_{anime_hash}")])]
-                        message.edit_reply_markup(InlineKeyboardMarkup(markup))
-
-
-                        # ENCODING START'S HERE 
-
-                        enc_msg = bot.send_message(production_chat,"Encoding {}".format(i['name']))
-                        encoded = encode_file(file_['file'])
-                        enc_msg.edit_text("Encoded Sucessfully now uploading")
-                        enocde_msg = file_client.send_document(chat_id=file_channel,document= encoded,file_name= f"[ENCODED] {name['main_res']}",caption=f"[ENCODED] {i['title'][number]}",force_document= True,thumb=thumbnail_url,progress=progress)
-                        enc_anime_hash = generate_hash(20)
-                        enc_msg_id = enocde_msg.id
-                        add_file(i['title'][number],enc_anime_hash,enc_msg_id)
-                        
-                        #Removing Uploading BTN
-
-                        
-
-                        markup = message.reply_markup.inline_keyboard if message.reply_markup else []
-                        markup.reverse()
-                        markup.pop()
-                        markup.reverse()
-                        [markup.append([InlineKeyboardButton(text='[ENCODED]',url= f"https://t.me/{bot_me.username}?start={enc_msg_id}_{enc_anime_hash}")])]
-                        message.edit_reply_markup(InlineKeyboardMarkup(markup))
-
-                        
-                        
-                        # ENCODING END'S HERE 
-
-                        os.remove(file_['file'])
-                        os.remove(encoded)
-                        remove_anime_from_remain()
-
-                            
-
-                    else :
-
-                        file_ = download_magnet(i['magnet'][number],update_msg)
-                        bot.send_message(production_chat,"Uploading {}".format(i['name']))
-                        
-                        file_msg = file_client.send_document(chat_id=file_channel,document= file_['file'],file_name= name['main_res'],caption=i['title'][number],force_document= True,thumb=thumbnail_url,progress=progress)
-
-                        anime_hash = generate_hash(20)
-                        msg_id = file_msg.id
-                        add_file(i['title'][number],anime_hash,msg_id)
-
-                        markup = message.reply_markup.inline_keyboard if message.reply_markup else []
-                        [markup.append([InlineKeyboardButton(text=f'{i["quality"][number]}',url= f"https://t.me/{bot_me.username}?start={msg_id}_{anime_hash}")])]
-                        message.edit_reply_markup(InlineKeyboardMarkup(markup))
-
-
-                        os.remove(file_['file'])
-
-                        remove_anime_from_remain()
-                        pass
-                        
-
-                except Exception as error:
-                    LOG.error(error)
-                    bot.send_message(production_chat,"There was a issue sending a file check logs for more info")
-                    pass
-    
-
-        update_worker(False)
-        return
-    except Exception as e :
-        LOG.error(e)
-        update_worker(False)
-
-
-# Starts The Torrent worker if needed 
-        
-def anime_worker() :
-
-    working = is_working()
-
-    if working :
-        return
-    else :
-
-        try :
-            anime_lst = get_remain_anime()
-
-            if len(anime_lst) == 0 :
-                return
-            else :
-                anime_upload(anime_lst)
-        
-        except Exception :
-            pass
-
-
-
-# Checks for new Anime
-        
-def check_anime() :
-
-    is_new = is_new_db()
-
-    if is_new :
-
-        LOG.info("New DB making required changes")
-        anime_list = get_anime('0',10)
-        add_remain_amime(anime_list['array'])
-        add_hash(anime_list['hash'])
-        return 
-    
-    else :
-
-        LOG.info("Checking for new anime")
-        last_hash = get_last_hash()
-        anime_list = get_anime(last_hash,30)
-
-        if anime_list == None :
-            LOG.info("No new anime found.")
-            return
-        
-        else :
-            add_remain_amime(anime_list['array'])
-            add_hash(anime_list['hash'])
-            bot.send_message(production_chat,"{} new anime are added to db".format(len(anime_list['array'])))
-            LOG.info("{} new anime are added to db.".format(len(anime_list['array'])))
-            return
-
-
-# Interval Maker // Same as javascript setInterval //
-
-def set_interval(callback, interval_seconds):
-    def wrapper():
-        while True:
-            callback()
-            time.sleep(interval_seconds)
-
-    thread = threading.Thread(target=wrapper)
-    thread.daemon = True
-    thread.start()
-
-
-
-
-async def main() -> None :
-    
-    try :
+        if not txt:
+            await message.reply_text("Hello, I am the file sender bot. I send anime based on the given hash and id.")
+        elif doc is None:
+            await message.reply_text("Wrong hash given")
+        else:
+            await bot.forward_messages(message.chat.id, FILE_CHANNEL, doc['message_id'], protect_content=True)
+    except Exception as e:
+        LOG.error(f"Error in start_pm: {e}")
+
+@bot.on_message(filters.command('logs') & filters.user(OWNER))
+async def send_logs_command(client: Client, message: Message) -> None:
+    await send_logs(client, message)
+
+async def main() -> None:
+    try:
         mongo_client.admin.command('ping')
-        LOG.info("Connected to Mongo-DB")
-        pass
-    except Exception as eor :
-        LOG.critical("Mongo DB Not connected error : {}".format(eor))
+        LOG.info("Connected to MongoDB")
+    except Exception as e:
+        LOG.critical(f"MongoDB not connected. Error: {e}")
         return
-    
 
     await file_client.start()
-    # await file_client.send_message(Vars['production_chat'],"File Bot Started")
     LOG.info('File Bot Started')
 
     await bot.start()
-    # await bot.send_message(Vars['production_chat'],"Main Bot Started")
     LOG.info('Main Bot Started')
-
-    global bot_me 
-    bot_me = await bot.get_me()
 
     update_worker(False)
 
+    while True:
+        await check_anime()
+        await anime_worker()
+        await asyncio.sleep(5 * 60)  # Check every 5 minutes
 
-    set_interval(check_anime, 5 * 60)
-    set_interval(anime_worker, 5 * 60)
-
-
-    await idle()
     await file_client.stop()
     await bot.stop()
 
-
-if __name__ == "__main__" :
-    loop.run_until_complete(main())
-
-
-# End of Main File
+if __name__ == "__main__":
+    asyncio.run(main())
